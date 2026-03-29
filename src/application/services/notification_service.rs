@@ -275,36 +275,51 @@ impl NotificationService {
         Ok(())
     }
 
-    /// Scheduler: send seller stats (weekly)
+    /// Scheduler: send seller stats (weekly, one aggregate message per seller)
     pub async fn send_seller_stats(&self) -> Result<(), anyhow::Error> {
         let rows: Vec<(Uuid, i64, String, i32, i32)> = sqlx::query_as(
-            r#"SELECT l.id, u.telegram_id, l.title, l.views_count, l.likes_count
+            r#"SELECT l.user_id, u.telegram_id, l.title, l.views_count, l.likes_count
                FROM listings l JOIN users u ON u.id = l.user_id
-               WHERE l.status = 'active'"#,
+               WHERE l.status = 'active'
+               ORDER BY l.user_id, l.created_at DESC"#,
         )
         .fetch_all(&self.db_pool)
         .await?;
 
-        for (listing_id, telegram_id, title, views, likes) in rows {
-            let mut params = HashMap::new();
-            params.insert("title", title);
-            params.insert("views", views.to_string());
-            params.insert("likes", likes.to_string());
+        // Group by seller (user_id, telegram_id)
+        let mut sellers: HashMap<(Uuid, i64), Vec<(String, i32, i32)>> = HashMap::new();
+        for (user_id, telegram_id, title, views, likes) in rows {
+            sellers
+                .entry((user_id, telegram_id))
+                .or_default()
+                .push((title, views, likes));
+        }
 
-            if let Ok(html) = self
-                .template_service
-                .render("notif_seller_stats", &params)
-                .await
-            {
-                let button_url = format!(
-                    "https://t.me/{}?startapp=car_{}",
-                    self.bot_username, listing_id
-                );
-                let _ = self
-                    .sender
-                    .send_html(telegram_id, &html, Some("Продвинуть"), Some(&button_url))
-                    .await;
-            }
+        for ((user_id, telegram_id), listings) in &sellers {
+            let total_views: i32 = listings.iter().map(|(_, v, _)| v).sum();
+            let total_likes: i32 = listings.iter().map(|(_, _, l)| l).sum();
+
+            let listing_lines: String = listings
+                .iter()
+                .map(|(title, views, likes)| {
+                    format!("• <b>{}</b> — {} 👁, {} ❤️", title, views, likes)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let html = format!(
+                "<b>Статистика за неделю</b>\n\n{}\n\n<b>Итого:</b> {} просмотров, {} лайков",
+                listing_lines, total_views, total_likes
+            );
+
+            let button_url = format!(
+                "https://t.me/{}?startapp=profile_{}",
+                self.bot_username, user_id
+            );
+            let _ = self
+                .sender
+                .send_html(*telegram_id, &html, Some("Продвинуть"), Some(&button_url))
+                .await;
         }
         Ok(())
     }

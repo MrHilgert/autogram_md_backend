@@ -1,6 +1,7 @@
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use crate::application::services::payment_service::PaymentService;
+use super::types::{SendMessagePayload, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo};
 
 const WELCOME_TEXT: &str = "Привет! Здесь покупают и продают авто в Приднестровье.\nВсе объявления рядом — листай, выбирай, пиши продавцу.";
 
@@ -168,31 +169,3 @@ struct Chat {
     id: i64,
 }
 
-#[derive(Debug, Serialize)]
-struct SendMessagePayload {
-    chat_id: i64,
-    text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parse_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reply_markup: Option<InlineKeyboardMarkup>,
-}
-
-#[derive(Debug, Serialize)]
-struct InlineKeyboardMarkup {
-    inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
-}
-
-#[derive(Debug, Serialize)]
-struct InlineKeyboardButton {
-    text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    web_app: Option<WebAppInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct WebAppInfo {
-    url: String,
-}

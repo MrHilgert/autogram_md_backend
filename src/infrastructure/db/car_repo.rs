@@ -398,27 +398,31 @@ impl CarRepository for PgCarRepository {
         user_id: Uuid,
         listing_id: Uuid,
     ) -> Result<bool, anyhow::Error> {
+        let mut tx = self.pool.begin().await?;
+
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM favorites WHERE user_id = $1 AND listing_id = $2)",
         )
         .bind(user_id)
         .bind(listing_id)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
 
         if exists {
             sqlx::query("DELETE FROM favorites WHERE user_id = $1 AND listing_id = $2")
                 .bind(user_id)
                 .bind(listing_id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
         } else {
             sqlx::query("INSERT INTO favorites (user_id, listing_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
                 .bind(user_id)
                 .bind(listing_id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
         }
+
+        tx.commit().await?;
 
         Ok(!exists)
     }

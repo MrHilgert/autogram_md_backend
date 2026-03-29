@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 
 use crate::application::ports::notification_sender::NotificationSender;
+use super::types::{SendMessagePayload, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo};
 
 pub struct TelegramNotificationSender {
     client: reqwest::Client,
@@ -144,7 +145,7 @@ impl NotificationSender for TelegramNotificationSender {
     }
 }
 
-// Duplicated from bot.rs (private types there)
+// SendPhotoPayload is notification_sender-specific (not shared with bot.rs)
 #[derive(Debug, Serialize)]
 struct SendPhotoPayload {
     chat_id: i64,
@@ -155,33 +156,4 @@ struct SendPhotoPayload {
     parse_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reply_markup: Option<InlineKeyboardMarkup>,
-}
-
-#[derive(Debug, Serialize)]
-struct SendMessagePayload {
-    chat_id: i64,
-    text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parse_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reply_markup: Option<InlineKeyboardMarkup>,
-}
-
-#[derive(Debug, Serialize)]
-struct InlineKeyboardMarkup {
-    inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
-}
-
-#[derive(Debug, Serialize)]
-struct InlineKeyboardButton {
-    text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    web_app: Option<WebAppInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct WebAppInfo {
-    url: String,
 }

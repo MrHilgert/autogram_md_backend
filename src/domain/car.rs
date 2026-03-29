@@ -122,6 +122,12 @@ pub struct Listing {
     pub location: Option<String>,
     pub views_count: i32,
     pub likes_count: i32,
+    pub removal_reason: Option<String>,
+    pub removed_at: Option<DateTime<Utc>>,
+    pub boosted_at: Option<DateTime<Utc>>,
+    pub promoted_stars: i32,
+    pub previous_price: Option<i32>,
+    pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
