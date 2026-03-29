@@ -124,41 +124,69 @@ impl NotificationService {
         &self,
         search: &crate::domain::saved_search::SavedSearch,
     ) -> Result<(), anyhow::Error> {
+        use sqlx::postgres::PgArguments;
+        use sqlx::Arguments;
+
         // Find new active listings matching filters, created after last_checked_at
         let filters = &search.filters;
         let mut conditions = vec!["l.status = 'active'".to_string()];
-        conditions.push(format!(
-            "l.created_at > '{}'",
-            search.last_checked_at.to_rfc3339()
-        ));
+        let mut param_index: usize = 0;
+        let mut args = PgArguments::default();
+
+        // Bind last_checked_at as a parameter
+        param_index += 1;
+        conditions.push(format!("l.created_at > ${}", param_index));
+        args.add(search.last_checked_at)
+            .map_err(|e| anyhow::anyhow!("bind error: {}", e))?;
 
         if let Some(make_id) = filters.get("makeId").and_then(|v| v.as_i64()) {
-            conditions.push(format!("l.make_id = {}", make_id));
+            param_index += 1;
+            conditions.push(format!("l.make_id = ${}", param_index));
+            args.add(make_id as i32)
+                .map_err(|e| anyhow::anyhow!("bind error: {}", e))?;
         }
         if let Some(model_id) = filters.get("modelId").and_then(|v| v.as_i64()) {
-            conditions.push(format!("l.model_id = {}", model_id));
+            param_index += 1;
+            conditions.push(format!("l.model_id = ${}", param_index));
+            args.add(model_id as i32)
+                .map_err(|e| anyhow::anyhow!("bind error: {}", e))?;
         }
         if let Some(price_min) = filters.get("priceMin").and_then(|v| v.as_i64()) {
-            conditions.push(format!("l.price >= {}", price_min));
+            param_index += 1;
+            conditions.push(format!("l.price >= ${}", param_index));
+            args.add(price_min as i32)
+                .map_err(|e| anyhow::anyhow!("bind error: {}", e))?;
         }
         if let Some(price_max) = filters.get("priceMax").and_then(|v| v.as_i64()) {
-            conditions.push(format!("l.price <= {}", price_max));
+            param_index += 1;
+            conditions.push(format!("l.price <= ${}", param_index));
+            args.add(price_max as i32)
+                .map_err(|e| anyhow::anyhow!("bind error: {}", e))?;
         }
         if let Some(year_min) = filters.get("yearMin").and_then(|v| v.as_i64()) {
-            conditions.push(format!("l.year >= {}", year_min));
+            param_index += 1;
+            conditions.push(format!("l.year >= ${}", param_index));
+            args.add(year_min as i16)
+                .map_err(|e| anyhow::anyhow!("bind error: {}", e))?;
         }
         if let Some(year_max) = filters.get("yearMax").and_then(|v| v.as_i64()) {
-            conditions.push(format!("l.year <= {}", year_max));
+            param_index += 1;
+            conditions.push(format!("l.year <= ${}", param_index));
+            args.add(year_max as i16)
+                .map_err(|e| anyhow::anyhow!("bind error: {}", e))?;
         }
 
-        // Handle fuel filter (stored as array in JSONB)
+        // Handle fuel filter (stored as array in JSONB) — bind as Vec<String>
         if let Some(fuels) = filters.get("fuel").and_then(|v| v.as_array()) {
             let fuel_list: Vec<String> = fuels.iter()
                 .filter_map(|f| f.as_str())
-                .map(|f| format!("'{}'", f))
+                .map(|s| s.to_string())
                 .collect();
             if !fuel_list.is_empty() {
-                conditions.push(format!("l.fuel::text IN ({})", fuel_list.join(",")));
+                param_index += 1;
+                conditions.push(format!("l.fuel::text = ANY(${})", param_index));
+                args.add(fuel_list)
+                    .map_err(|e| anyhow::anyhow!("bind error: {}", e))?;
             }
         }
 
@@ -168,10 +196,10 @@ impl NotificationService {
             where_clause
         );
 
-        tracing::info!(search_id = %search.id, search_name = %search.name, sql = %sql, "Checking saved search");
+        tracing::info!(search_id = %search.id, search_name = %search.name, "Checking saved search");
 
         let rows: Vec<(Uuid, String, i32, String)> =
-            sqlx::query_as(&sql).fetch_all(&self.db_pool).await?;
+            sqlx::query_as_with(&sql, args).fetch_all(&self.db_pool).await?;
 
         tracing::info!(search_id = %search.id, found = rows.len(), "Saved search results");
 
