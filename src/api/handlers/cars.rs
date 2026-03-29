@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use actix_web::{delete, get, post, put, web, HttpResponse};
+use actix_web::{delete, get, post, put, route, web, HttpResponse};
 use futures_util::TryStreamExt;
 use uuid::Uuid;
 use validator::Validate;
@@ -478,4 +478,71 @@ pub async fn get_filter_options(
 ) -> Result<HttpResponse, ApiError> {
     let options = car_service.get_filter_options();
     Ok(HttpResponse::Ok().json(options))
+}
+
+#[route("/s/{id}", method = "GET", method = "HEAD")]
+pub async fn share_page(
+    path: web::Path<String>,
+    car_service: web::Data<Arc<CarService>>,
+) -> HttpResponse {
+    let id_str = path.into_inner();
+    let listing_id = match Uuid::parse_str(&id_str) {
+        Ok(id) => id,
+        Err(_) => return HttpResponse::NotFound().body("Not found"),
+    };
+
+    let listing = match car_service.car_repo_ref().find_by_id(listing_id).await {
+        Ok(Some(l)) => l,
+        _ => return HttpResponse::NotFound().body("Not found"),
+    };
+
+    let photos = car_service.car_repo_ref().get_photos(listing_id).await.unwrap_or_default();
+    let photo = photos.iter().find(|p| p.is_primary).or(photos.first());
+    let photo_url = photo.map(|p| p.url.as_str()).unwrap_or("");
+
+    let formatted_price = listing.price.to_string()
+        .as_bytes().rchunks(3).rev()
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect::<Vec<_>>().join(" ");
+    let currency_symbol = match listing.currency.as_str() {
+        "USD" => "$", "EUR" => "€", "RUP" => "руб.", _ => &listing.currency,
+    };
+    let price_text = format!("{} {}", formatted_price, currency_symbol);
+    let location = listing.location.as_deref().unwrap_or("");
+
+    let description = if location.is_empty() {
+        price_text.clone()
+    } else {
+        format!("{} · {}", price_text, location)
+    };
+
+    let app_url = format!("https://t.me/pmrcar_bot?startapp=car_{}", listing_id);
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>{title} — АвтоГрам</title>
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="АвтоГрам" />
+<meta property="og:title" content="{title}" />
+<meta property="og:description" content="{description}" />
+<meta property="og:image" content="{photo}" />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:url" content="{share_url}" />
+</head>
+<body><script>window.location.replace("{app_url}");</script></body>
+</html>"#,
+        title = listing.title,
+        description = description,
+        photo = photo_url,
+        app_url = app_url,
+        share_url = format!("https://car.hilgert.cc/s/{}", listing_id),
+    );
+
+    HttpResponse::Ok()
+        .content_type("text/html; charset=utf-8")
+        .body(html)
 }

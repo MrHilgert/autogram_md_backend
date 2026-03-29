@@ -185,8 +185,9 @@ async fn main() -> std::io::Result<()> {
         let bot_token = config.bot_token.clone();
         let webapp_url = config.webapp_url.clone();
         let ps = payment_service.clone();
+        let cr = car_repo.clone();
         tokio::spawn(async move {
-            infrastructure::telegram::bot::run_bot(bot_token, webapp_url, ps).await;
+            infrastructure::telegram::bot::run_bot(bot_token, webapp_url, ps, cr).await;
         });
     }
 
@@ -267,6 +268,7 @@ async fn main() -> std::io::Result<()> {
             .service(api::handlers::saved_searches::list_saved_searches)
             .service(api::handlers::saved_searches::delete_saved_search)
             .service(api::handlers::cars::extend_listing)
+            .service(api::handlers::cars::share_page)
     })
     .bind(&bind_addr)?
     .run()
