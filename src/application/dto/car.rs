@@ -165,7 +165,7 @@ pub struct CreateListingRequest {
     #[serde(default)]
     pub title: String,
     pub description: Option<String>,
-    #[validate(range(min = 0))]
+    #[validate(range(min = 1))]
     pub price: i32,
     pub currency: Option<String>,
     pub make_id: i32,

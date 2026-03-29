@@ -21,8 +21,45 @@ impl FeedCache {
     ) -> Result<(), anyhow::Error> {
         let key = format!("feed:personal:{}", user_id);
         let mut conn = self.redis.get().await?;
-        let value = serde_json::to_string(listing_ids)?;
+        let capped = if listing_ids.len() > 500 {
+            &listing_ids[..500]
+        } else {
+            listing_ids
+        };
+        let value = serde_json::to_string(capped)?;
         conn.set_ex::<_, _, ()>(&key, &value, FEED_TTL).await?;
+        Ok(())
+    }
+
+    /// Delete the personalized feed cache for a specific user.
+    pub async fn invalidate_user_feed(&self, user_id: Uuid) -> Result<(), anyhow::Error> {
+        let key = format!("feed:personal:{}", user_id);
+        let mut conn = self.redis.get().await?;
+        let _: () = redis::cmd("DEL").arg(&key).query_async(&mut conn).await?;
+        Ok(())
+    }
+
+    /// Delete all personalized feed caches (e.g. after new listing created).
+    pub async fn invalidate_all_feeds(&self) -> Result<(), anyhow::Error> {
+        let mut conn = self.redis.get().await?;
+        let mut cursor: u64 = 0;
+        loop {
+            let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg("feed:personal:*")
+                .arg("COUNT")
+                .arg(100)
+                .query_async(&mut conn)
+                .await?;
+            if !keys.is_empty() {
+                let _: () = redis::cmd("DEL").arg(&keys).query_async(&mut conn).await?;
+            }
+            if next_cursor == 0 {
+                break;
+            }
+            cursor = next_cursor;
+        }
         Ok(())
     }
 

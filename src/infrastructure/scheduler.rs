@@ -26,6 +26,12 @@ pub async fn run_daily_tasks(
         tokio::time::sleep(Duration::from_secs(86400)).await;
         tracing::info!("Running daily tasks");
 
+        // Expire old listings
+        match car_repo.expire_old_listings().await {
+            Ok(count) => tracing::info!(affected = count, "Expired old listings"),
+            Err(e) => tracing::error!("Expire old listings failed: {:?}", e),
+        }
+
         // Decay promoted stars (10 per day)
         match car_repo.decay_promoted_stars(10).await {
             Ok(count) => tracing::info!(affected = count, "Promoted stars daily decay"),

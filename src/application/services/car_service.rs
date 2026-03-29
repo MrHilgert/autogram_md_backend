@@ -354,13 +354,8 @@ impl CarService {
         let (page_ids, has_more) = match cached {
             Some(result) => result,
             None => {
-                // Cache expired — return empty page, frontend will refresh
-                return Ok(FeedResponse {
-                    items: vec![],
-                    cursor: None,
-                    has_more: false,
-                    promoted: vec![],
-                });
+                // Cache expired — fall back to standard (non-personalized) feed
+                return self.get_standard_feed(Some(uid), limit as i64).await;
             }
         };
 
@@ -400,6 +395,105 @@ impl CarService {
             cursor: next_cursor,
             has_more,
             promoted: vec![],
+        })
+    }
+
+    /// Standard (non-personalized) feed with default filters — used as fallback
+    /// when the personalized feed cache has expired.
+    async fn get_standard_feed(
+        &self,
+        user_id: Option<Uuid>,
+        limit: i64,
+    ) -> Result<FeedResponse, anyhow::Error> {
+        let filter = FeedFilter {
+            cursor_created_at: None,
+            cursor_id: None,
+            cursor_price: None,
+            cursor_mileage: None,
+            limit,
+            sort: "newest".to_string(),
+            make_id: None,
+            model_id: None,
+            year_min: None,
+            year_max: None,
+            price_min: None,
+            price_max: None,
+            mileage_min: None,
+            mileage_max: None,
+            fuel_types: vec![],
+            body_types: vec![],
+            transmissions: vec![],
+            drive_types: vec![],
+            features: vec![],
+        };
+
+        let mut rows = self.car_repo.feed(&filter).await?;
+        let has_more = rows.len() as i64 > limit;
+        if has_more {
+            rows.truncate(limit as usize);
+        }
+
+        let next_cursor = if has_more {
+            rows.last().map(|row| {
+                let cursor_time = row.boosted_at.unwrap_or(row.created_at);
+                Self::encode_cursor(&CursorData {
+                    c: Some(cursor_time.to_rfc3339()),
+                    i: row.id.to_string(),
+                    p: Some(row.price),
+                    m: Some(row.mileage_km),
+                })
+            })
+        } else {
+            None
+        };
+
+        let listing_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+        let (liked_ids, favorited_ids) = if let Some(uid) = user_id {
+            let liked = self.car_repo.get_liked_ids(uid, &listing_ids).await?;
+            let favorited = self.car_repo.get_favorited_ids(uid, &listing_ids).await?;
+            (
+                liked.into_iter().collect::<HashSet<_>>(),
+                favorited.into_iter().collect::<HashSet<_>>(),
+            )
+        } else {
+            (HashSet::new(), HashSet::new())
+        };
+
+        let mut photos_map = self.car_repo.get_photos_batch(&listing_ids).await?;
+        let items = rows
+            .into_iter()
+            .map(|row| {
+                let photos = photos_map.remove(&row.id).unwrap_or_default();
+                self.feed_row_to_summary(row, &liked_ids, &favorited_ids, photos)
+            })
+            .collect();
+
+        // Include promoted listings since this is effectively a first page
+        let promoted = {
+            let promoted_rows = self.car_repo.get_promoted(user_id, 10).await?;
+            let promo_ids: Vec<Uuid> = promoted_rows.iter().map(|r| r.id).collect();
+            let (promo_liked, promo_fav) = if let Some(uid) = user_id {
+                (
+                    self.car_repo.get_liked_ids(uid, &promo_ids).await?.into_iter().collect::<HashSet<_>>(),
+                    self.car_repo.get_favorited_ids(uid, &promo_ids).await?.into_iter().collect::<HashSet<_>>(),
+                )
+            } else {
+                (HashSet::new(), HashSet::new())
+            };
+            let mut promo_photos_map = self.car_repo.get_photos_batch(&promo_ids).await?;
+            promoted_rows.into_iter()
+                .map(|row| {
+                    let photos = promo_photos_map.remove(&row.id).unwrap_or_default();
+                    self.feed_row_to_summary(row, &promo_liked, &promo_fav, photos)
+                })
+                .collect()
+        };
+
+        Ok(FeedResponse {
+            items,
+            cursor: next_cursor,
+            has_more,
+            promoted,
         })
     }
 
@@ -727,6 +821,7 @@ impl CarService {
         req.title = format!("{} {}, {}", make_name, model_name, req.year);
 
         let listing_id = self.car_repo.create_listing(user_id, &req).await?;
+        let _ = self.feed_cache.invalidate_all_feeds().await;
         // Return the full detail response
         self.get_listing(listing_id, Some(user_id))
             .await?
@@ -749,6 +844,7 @@ impl CarService {
         }
 
         self.car_repo.update_listing(listing_id, req).await?;
+        let _ = self.feed_cache.invalidate_user_feed(user_id).await;
         Ok(())
     }
 
@@ -765,6 +861,7 @@ impl CarService {
         }
 
         self.car_repo.archive_listing(listing_id, reason).await?;
+        let _ = self.feed_cache.invalidate_all_feeds().await;
         Ok(())
     }
 

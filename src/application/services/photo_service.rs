@@ -20,7 +20,7 @@ impl PhotoService {
         &self,
         listing_id: Uuid,
         data: Vec<u8>,
-        content_type: &str,
+        _content_type: &str,
     ) -> Result<(String, String), anyhow::Error> {
         // Validate image BEFORE upload — also protects against decompression bombs
         let img = image::load_from_memory(&data)?;
@@ -29,18 +29,25 @@ impl PhotoService {
             anyhow::bail!("Image too large: {}x{}", w, h);
         }
 
-        // Upload original
-        let url = self
-            .storage
-            .upload(listing_id, data, content_type, ".jpg")
-            .await?;
+        // Detect actual format for correct extension and content type
+        let format = image::guess_format(&data)?;
+        let (suffix, actual_content_type) = match format {
+            image::ImageFormat::Jpeg => (".jpg", "image/jpeg"),
+            image::ImageFormat::Png => (".png", "image/png"),
+            image::ImageFormat::WebP => (".webp", "image/webp"),
+            _ => (".jpg", "image/jpeg"),
+        };
 
         // Generate thumbnail from already-parsed image (no double parse)
         let thumb_data = generate_thumbnail_from_image(&img, 400)?;
-        let thumb_url = self
-            .storage
-            .upload(listing_id, thumb_data, "image/jpeg", "_thumb.jpg")
-            .await?;
+
+        // Upload original and thumbnail in parallel
+        let (url_result, thumb_result) = tokio::join!(
+            self.storage.upload(listing_id, data, actual_content_type, suffix),
+            self.storage.upload(listing_id, thumb_data, "image/jpeg", "_thumb.jpg"),
+        );
+        let url = url_result?;
+        let thumb_url = thumb_result?;
 
         Ok((url, thumb_url))
     }

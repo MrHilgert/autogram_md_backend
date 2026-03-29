@@ -51,6 +51,7 @@ impl PhotoStorage {
             .key(&key)
             .body(ByteStream::from(data))
             .content_type(content_type)
+            .cache_control("public, max-age=31536000, immutable")
             .send()
             .await?;
 

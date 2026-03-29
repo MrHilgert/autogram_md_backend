@@ -61,7 +61,10 @@ impl ParamBuilder {
 impl CarRepository for PgCarRepository {
     async fn feed(&self, filter: &FeedFilter) -> Result<Vec<FeedRow>, anyhow::Error> {
         let mut pb = ParamBuilder::new();
-        let mut conditions = vec!["l.status = 'active'".to_string()];
+        let mut conditions = vec![
+            "l.status = 'active'".to_string(),
+            "(l.expires_at IS NULL OR l.expires_at > now())".to_string(),
+        ];
 
         // Filters
         if let Some(make_id) = filter.make_id {
@@ -786,7 +789,7 @@ impl CarRepository for PgCarRepository {
         let p_user = pb.add(user_id)?;
         let mut conditions = vec![
             format!("f.user_id = {p_user}"),
-            "l.status = 'active'".to_string(),
+            "l.status IN ('active', 'archived', 'sold')".to_string(),
         ];
 
         if let (Some(created_at), Some(id)) = (cursor_created_at, cursor_id) {
@@ -812,7 +815,7 @@ impl CarRepository for PgCarRepository {
                 m.id AS make_id, m.name AS make_name, m.slug AS make_slug,
                 cm.id AS model_id, cm.name AS model_name, cm.slug AS model_slug,
                 ph.id AS photo_id, ph.url AS photo_url, ph.thumbnail_url AS photo_thumbnail_url,
-                NULL::text AS status, NULL::text AS removal_reason,
+                l.status::text AS status, l.removal_reason::text AS removal_reason,
                 l.promoted_stars, l.boosted_at
             FROM favorites f
             INNER JOIN listings l ON l.id = f.listing_id
@@ -847,7 +850,7 @@ impl CarRepository for PgCarRepository {
         let p_user = pb.add(user_id)?;
         let mut conditions = vec![
             format!("lk.user_id = {p_user}"),
-            "l.status = 'active'".to_string(),
+            "l.status IN ('active', 'archived', 'sold')".to_string(),
         ];
 
         if let (Some(created_at), Some(id)) = (cursor_created_at, cursor_id) {
@@ -873,7 +876,7 @@ impl CarRepository for PgCarRepository {
                 m.id AS make_id, m.name AS make_name, m.slug AS make_slug,
                 cm.id AS model_id, cm.name AS model_name, cm.slug AS model_slug,
                 ph.id AS photo_id, ph.url AS photo_url, ph.thumbnail_url AS photo_thumbnail_url,
-                NULL::text AS status, NULL::text AS removal_reason,
+                l.status::text AS status, l.removal_reason::text AS removal_reason,
                 l.promoted_stars, l.boosted_at
             FROM likes lk
             INNER JOIN listings l ON l.id = lk.listing_id
@@ -1023,7 +1026,7 @@ impl CarRepository for PgCarRepository {
                 WHERE lp.listing_id = l.id AND lp.is_primary = TRUE
                 LIMIT 1
             ) ph ON TRUE
-            WHERE l.promoted_stars > 0 AND l.status = 'active'
+            WHERE l.promoted_stars > 0 AND l.status = 'active' AND (l.expires_at IS NULL OR l.expires_at > now())
             ORDER BY l.promoted_stars DESC, l.id DESC
             LIMIT {p_limit}"#,
         );
@@ -1067,6 +1070,21 @@ impl CarRepository for PgCarRepository {
         Ok(())
     }
 
+    async fn expire_old_listings(&self) -> Result<i64, anyhow::Error> {
+        let result = sqlx::query(
+            r#"UPDATE listings
+               SET status = 'archived'::listing_status,
+                   removal_reason = 'expired'::removal_reason,
+                   removed_at = NOW(),
+                   updated_at = NOW()
+               WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= now()"#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() as i64)
+    }
+
     async fn feed_by_ids(&self, ids: &[Uuid]) -> Result<Vec<FeedRow>, anyhow::Error> {
         if ids.is_empty() {
             return Ok(vec![]);
@@ -1093,7 +1111,7 @@ impl CarRepository for PgCarRepository {
                 WHERE lp.listing_id = l.id AND lp.is_primary = TRUE
                 LIMIT 1
             ) ph ON TRUE
-            WHERE l.id = ANY($1) AND l.status = 'active'
+            WHERE l.id = ANY($1) AND l.status = 'active' AND (l.expires_at IS NULL OR l.expires_at > now())
             ORDER BY array_position($1, l.id)"#,
         )
         .bind(ids)

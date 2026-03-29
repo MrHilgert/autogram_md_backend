@@ -234,6 +234,9 @@ pub trait CarRepository: Send + Sync {
     // Extend listing expiration
     async fn extend_listing(&self, listing_id: Uuid, user_id: Uuid) -> Result<(), anyhow::Error>;
 
+    // Expiration
+    async fn expire_old_listings(&self) -> Result<i64, anyhow::Error>;
+
     // Personalized feed support
     async fn feed_by_ids(&self, ids: &[Uuid]) -> Result<Vec<FeedRow>, anyhow::Error>;
     async fn get_listing_attrs(&self, id: Uuid) -> Result<Option<ListingAttrsRow>, anyhow::Error>;

@@ -30,6 +30,12 @@ impl ViewCounter {
         if is_new {
             let counter_key = format!("cars:views:{}", car_id);
             let _: () = conn.incr(&counter_key, 1i64).await?;
+            // Expire inactive counters after 90 days
+            let _: () = redis::cmd("EXPIRE")
+                .arg(&counter_key)
+                .arg(7_776_000i64)
+                .query_async(&mut conn)
+                .await?;
         }
 
         Ok(is_new)
