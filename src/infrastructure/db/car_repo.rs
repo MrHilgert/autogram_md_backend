@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgArguments;
@@ -266,6 +267,24 @@ impl CarRepository for PgCarRepository {
         .await?;
 
         Ok(photos)
+    }
+
+    async fn get_photos_batch(&self, listing_ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<ListingPhoto>>, anyhow::Error> {
+        let photos = sqlx::query_as::<_, ListingPhoto>(
+            r#"SELECT id, listing_id, url, thumbnail_url, sort_order, is_primary, created_at
+               FROM listing_photos
+               WHERE listing_id = ANY($1)
+               ORDER BY listing_id, sort_order ASC"#,
+        )
+        .bind(listing_ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut map: HashMap<Uuid, Vec<ListingPhoto>> = HashMap::new();
+        for photo in photos {
+            map.entry(photo.listing_id).or_default().push(photo);
+        }
+        Ok(map)
     }
 
     async fn get_makes(&self) -> Result<Vec<CarMake>, anyhow::Error> {
@@ -1014,6 +1033,20 @@ impl CarRepository for PgCarRepository {
             .await?;
 
         Ok(rows)
+    }
+
+    async fn decay_promoted_stars(&self, amount: i32) -> Result<u64, anyhow::Error> {
+        let result = sqlx::query(
+            r#"UPDATE listings
+               SET promoted_stars = GREATEST(0, promoted_stars - $1),
+                   updated_at = NOW()
+               WHERE promoted_stars > 0 AND status = 'active'"#,
+        )
+        .bind(amount)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 
     async fn extend_listing(&self, listing_id: Uuid, user_id: Uuid) -> Result<(), anyhow::Error> {

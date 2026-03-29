@@ -65,9 +65,98 @@ impl NotificationSender for TelegramNotificationSender {
 
         Ok(())
     }
+
+    async fn send_with_url_button(
+        &self,
+        telegram_id: i64,
+        html: &str,
+        button_text: &str,
+        button_url: &str,
+    ) -> Result<(), anyhow::Error> {
+        let reply_markup = InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![InlineKeyboardButton {
+                text: button_text.to_string(),
+                web_app: None,
+                url: Some(button_url.to_string()),
+            }]],
+        };
+
+        let payload = SendMessagePayload {
+            chat_id: telegram_id,
+            text: html.to_string(),
+            parse_mode: Some("HTML".to_string()),
+            reply_markup: Some(reply_markup),
+        };
+
+        let resp = self
+            .client
+            .post(format!("{}/sendMessage", self.api_base))
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(telegram_id = telegram_id, "Telegram sendMessage failed: {}", body);
+            return Err(anyhow::anyhow!("Telegram API error: {}", body));
+        }
+
+        Ok(())
+    }
+    async fn send_photo_with_url_button(
+        &self,
+        telegram_id: i64,
+        photo_url: &str,
+        caption_html: &str,
+        button_text: &str,
+        button_url: &str,
+    ) -> Result<(), anyhow::Error> {
+        let reply_markup = InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![InlineKeyboardButton {
+                text: button_text.to_string(),
+                web_app: None,
+                url: Some(button_url.to_string()),
+            }]],
+        };
+
+        let payload = SendPhotoPayload {
+            chat_id: telegram_id,
+            photo: photo_url.to_string(),
+            caption: Some(caption_html.to_string()),
+            parse_mode: Some("HTML".to_string()),
+            reply_markup: Some(reply_markup),
+        };
+
+        let resp = self
+            .client
+            .post(format!("{}/sendPhoto", self.api_base))
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!(telegram_id = telegram_id, "Telegram sendPhoto failed: {}", body);
+            return Err(anyhow::anyhow!("Telegram API error: {}", body));
+        }
+
+        Ok(())
+    }
 }
 
 // Duplicated from bot.rs (private types there)
+#[derive(Debug, Serialize)]
+struct SendPhotoPayload {
+    chat_id: i64,
+    photo: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parse_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_markup: Option<InlineKeyboardMarkup>,
+}
+
 #[derive(Debug, Serialize)]
 struct SendMessagePayload {
     chat_id: i64,

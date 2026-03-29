@@ -8,8 +8,10 @@ use validator::Validate;
 use crate::api::error::ApiError;
 use crate::api::extractors::auth::AuthenticatedUser;
 use crate::application::dto::car::{ArchiveListingRequest, CreateListingRequest, FeedQuery, UpdateListingRequest, UploadedPhotoResponse};
+use crate::application::ports::notification_sender::NotificationSender;
 use crate::application::services::car_service::CarService;
 use crate::application::services::photo_service::PhotoService;
+use crate::application::services::template_service::TemplateService;
 
 #[get("/api/feed")]
 pub async fn get_feed(
@@ -130,6 +132,10 @@ pub async fn create_listing(
         .create_listing(user.user_id, &req)
         .await
         .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("VALIDATION") {
+                return ApiError::Validation(msg);
+            }
             tracing::error!("Create listing error: {:?}", e);
             ApiError::Internal("Failed to create listing".to_string())
         })?;
@@ -155,6 +161,9 @@ pub async fn update_listing(
         .await
         .map_err(|e| {
             let msg = e.to_string();
+            if msg.contains("VALIDATION") {
+                return ApiError::Validation(msg);
+            }
             if msg.contains("FORBIDDEN") {
                 return ApiError::Forbidden("Forbidden".into());
             }
@@ -399,6 +408,68 @@ pub async fn extend_listing(
         })?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({"success": true})))
+}
+
+#[post("/api/listings/{id}/contact")]
+pub async fn contact_seller(
+    path: web::Path<Uuid>,
+    car_service: web::Data<Arc<CarService>>,
+    notification_sender: web::Data<Arc<dyn NotificationSender>>,
+    template_service: web::Data<Arc<TemplateService>>,
+    config: web::Data<crate::config::AppConfig>,
+    user: AuthenticatedUser,
+) -> Result<HttpResponse, ApiError> {
+    let listing_id = path.into_inner();
+
+    let detail = car_service
+        .get_listing(listing_id, Some(user.user_id))
+        .await
+        .map_err(|e| {
+            tracing::error!("Get listing error: {:?}", e);
+            ApiError::Internal("Failed to get listing".into())
+        })?
+        .ok_or_else(|| ApiError::NotFound("Listing not found".into()))?;
+
+    if detail.is_owner {
+        return Err(ApiError::BadRequest("Cannot contact yourself".into()));
+    }
+
+    let seller = detail.seller.as_ref()
+        .ok_or_else(|| ApiError::BadRequest("Seller not found".into()))?;
+
+    let seller_tg_id = seller.telegram_id;
+
+    let price_text = detail.price.map(|p| format!("{} {}", p, detail.currency)).unwrap_or_default();
+    let listing_url = format!("{}?startapp=car_{}", config.bot_webapp_url, listing_id);
+    let params = std::collections::HashMap::from([
+        ("title", detail.title.clone()),
+        ("price", price_text),
+        ("listing_url", listing_url),
+    ]);
+    let caption = template_service
+        .render("contact_seller", &params.iter().map(|(k, v)| (*k, v.clone())).collect())
+        .await
+        .unwrap_or_else(|_| format!("<b>{}</b>", detail.title));
+    let button_url = format!("tg://user?id={}", seller_tg_id);
+
+    // Send photo with button if available, otherwise text only
+    let photo_url = detail.photos.first().map(|p| p.url.as_str());
+    let result = if let Some(photo) = photo_url {
+        notification_sender
+            .send_photo_with_url_button(user.telegram_id, photo, &caption, "Профиль продавца", &button_url)
+            .await
+    } else {
+        notification_sender
+            .send_with_url_button(user.telegram_id, &caption, "Профиль продавца", &button_url)
+            .await
+    };
+
+    result.map_err(|e| {
+        tracing::error!("Failed to send contact button: {:?}", e);
+        ApiError::Internal("Failed to send message".into())
+    })?;
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({"ok": true})))
 }
 
 #[get("/api/filters/options")]

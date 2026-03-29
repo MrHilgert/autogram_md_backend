@@ -54,7 +54,7 @@ pub struct CarSummaryResponse {
     pub location: Option<String>,
     pub make: MakeResponse,
     pub model: ModelResponse,
-    pub photo: Option<PhotoResponse>,
+    pub photos: Vec<PhotoResponse>,
     pub views_count: i32,
     pub likes_count: i32,
     pub is_liked: bool,

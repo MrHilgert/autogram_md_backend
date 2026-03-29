@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub s3_public_url: String,
     #[serde(default = "default_webapp_url")]
     pub webapp_url: String,
+    #[serde(default = "default_bot_webapp_url")]
+    pub bot_webapp_url: String,
 }
 
 fn default_host() -> String {
@@ -40,6 +42,10 @@ fn default_s3_public_url() -> String {
 
 fn default_webapp_url() -> String {
     "https://car.hilgert.cc".to_string()
+}
+
+fn default_bot_webapp_url() -> String {
+    "https://t.me/pmrcar_bot/market".to_string()
 }
 
 impl AppConfig {

@@ -199,8 +199,9 @@ async fn main() -> std::io::Result<()> {
     }
     {
         let ns = notification_service.clone();
+        let cr = car_repo.clone();
         tokio::spawn(async move {
-            infrastructure::scheduler::run_daily_tasks(ns).await;
+            infrastructure::scheduler::run_daily_tasks(ns, cr).await;
         });
     }
 
@@ -250,6 +251,7 @@ async fn main() -> std::io::Result<()> {
             .service(api::handlers::cars::archive_listing)
             .service(api::handlers::cars::upload_photos)
             .service(api::handlers::cars::delete_photo)
+            .service(api::handlers::cars::contact_seller)
             .service(api::handlers::cars::get_filter_options)
             .service(api::handlers::payments::boost_listing)
             .service(api::handlers::payments::promote_listing)

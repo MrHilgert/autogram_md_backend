@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -181,6 +182,7 @@ pub trait CarRepository: Send + Sync {
         sort_order: i16,
         is_primary: bool,
     ) -> Result<Uuid, anyhow::Error>;
+    async fn get_photos_batch(&self, listing_ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<ListingPhoto>>, anyhow::Error>;
     async fn delete_photo(&self, photo_id: Uuid) -> Result<(), anyhow::Error>;
     async fn count_photos(&self, listing_id: Uuid) -> Result<i64, anyhow::Error>;
     async fn get_photo_by_id(
@@ -227,6 +229,7 @@ pub trait CarRepository: Send + Sync {
     async fn boost_listing(&self, listing_id: Uuid, user_id: Uuid) -> Result<(), anyhow::Error>;
     async fn add_promoted_stars(&self, listing_id: Uuid, user_id: Uuid, stars: i32) -> Result<i32, anyhow::Error>;
     async fn get_promoted(&self, user_id: Option<Uuid>, limit: i64) -> Result<Vec<FeedRow>, anyhow::Error>;
+    async fn decay_promoted_stars(&self, amount: i32) -> Result<u64, anyhow::Error>;
 
     // Extend listing expiration
     async fn extend_listing(&self, listing_id: Uuid, user_id: Uuid) -> Result<(), anyhow::Error>;

@@ -52,23 +52,23 @@ pub async fn create_saved_search(
             ApiError::Internal("Failed to create saved search".to_string())
         })?;
 
-    // Send confirmation via bot
-    tokio::spawn({
-        let sender = sender.get_ref().clone();
-        let template_svc = template_svc.get_ref().clone();
-        let user_repo = user_repo.get_ref().clone();
-        let user_id = user.user_id;
-        let search_name = search.name.clone();
-        async move {
-            if let Ok(Some(db_user)) = user_repo.find_by_id(user_id).await {
-                let mut params = HashMap::new();
-                params.insert("name", search_name);
-                if let Ok(html) = template_svc.render("saved_search_created", &params).await {
-                    let _ = sender.send_html(db_user.telegram_id, &html, None, None).await;
-                }
-            }
-        }
-    });
+    // Send confirmation via bot (disabled)
+    // tokio::spawn({
+    //     let sender = sender.get_ref().clone();
+    //     let template_svc = template_svc.get_ref().clone();
+    //     let user_repo = user_repo.get_ref().clone();
+    //     let user_id = user.user_id;
+    //     let search_name = search.name.clone();
+    //     async move {
+    //         if let Ok(Some(db_user)) = user_repo.find_by_id(user_id).await {
+    //             let mut params = HashMap::new();
+    //             params.insert("name", search_name);
+    //             if let Ok(html) = template_svc.render("saved_search_created", &params).await {
+    //                 let _ = sender.send_html(db_user.telegram_id, &html, None, None).await;
+    //             }
+    //         }
+    //     }
+    // });
 
     Ok(HttpResponse::Created().json(SavedSearchResponse {
         id: search.id.to_string(),

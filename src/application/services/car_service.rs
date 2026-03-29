@@ -10,7 +10,7 @@ use crate::application::dto::car::*;
 use crate::application::ports::car_repository::{CarRepository, FeedFilter, FeedRow};
 use crate::application::ports::preference_repository::PreferenceRepository;
 use crate::application::services::preference_service::PreferenceService;
-use crate::domain::car::ALLOWED_FEATURES;
+use crate::domain::car::{ALLOWED_FEATURES, ListingPhoto};
 use crate::domain::user_preference::{InteractionSignal, ListingAttributes};
 use crate::infrastructure::redis::feed_cache::FeedCache;
 use crate::infrastructure::redis::view_counter::ViewCounter;
@@ -223,7 +223,7 @@ impl CarService {
             None
         };
 
-        // Batch fetch liked/favorited IDs for authenticated user
+        // Batch fetch liked/favorited IDs and photos for authenticated user
         let listing_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
         let (liked_ids, favorited_ids) = if let Some(uid) = user_id {
             let liked = self.car_repo.get_liked_ids(uid, &listing_ids).await?;
@@ -236,9 +236,14 @@ impl CarService {
             (HashSet::new(), HashSet::new())
         };
 
+        let mut photos_map = self.car_repo.get_photos_batch(&listing_ids).await?;
+
         let items: Vec<CarSummaryResponse> = rows
             .into_iter()
-            .map(|row| self.feed_row_to_summary(row, &liked_ids, &favorited_ids))
+            .map(|row| {
+                let photos = photos_map.remove(&row.id).unwrap_or_default();
+                self.feed_row_to_summary(row, &liked_ids, &favorited_ids, photos)
+            })
             .collect();
 
         // Fetch promoted listings on first page only (standard feed)
@@ -253,8 +258,12 @@ impl CarService {
             } else {
                 (HashSet::new(), HashSet::new())
             };
+            let mut promo_photos_map = self.car_repo.get_photos_batch(&promo_ids).await?;
             promoted_rows.into_iter()
-                .map(|row| self.feed_row_to_summary(row, &promo_liked, &promo_fav))
+                .map(|row| {
+                    let photos = promo_photos_map.remove(&row.id).unwrap_or_default();
+                    self.feed_row_to_summary(row, &promo_liked, &promo_fav, photos)
+                })
                 .collect()
         } else {
             vec![]
@@ -309,9 +318,13 @@ impl CarService {
             .into_iter()
             .collect::<HashSet<_>>();
 
+        let mut photos_map = self.car_repo.get_photos_batch(&listing_ids).await?;
         let items = rows
             .into_iter()
-            .map(|row| self.feed_row_to_summary(row, &liked, &favorited))
+            .map(|row| {
+                let photos = photos_map.remove(&row.id).unwrap_or_default();
+                self.feed_row_to_summary(row, &liked, &favorited, photos)
+            })
             .collect();
 
         let next_cursor = if has_more {
@@ -367,9 +380,13 @@ impl CarService {
             .into_iter()
             .collect::<HashSet<_>>();
 
+        let mut photos_map2 = self.car_repo.get_photos_batch(&listing_ids).await?;
         let items = rows
             .into_iter()
-            .map(|row| self.feed_row_to_summary(row, &liked, &favorited))
+            .map(|row| {
+                let photos = photos_map2.remove(&row.id).unwrap_or_default();
+                self.feed_row_to_summary(row, &liked, &favorited, photos)
+            })
             .collect();
 
         let next_cursor = if has_more {
@@ -391,14 +408,18 @@ impl CarService {
         row: FeedRow,
         liked_ids: &HashSet<Uuid>,
         favorited_ids: &HashSet<Uuid>,
+        photos: Vec<ListingPhoto>,
     ) -> CarSummaryResponse {
-        let photo = row.photo_id.map(|id| PhotoResponse {
-            id: id.to_string(),
-            url: row.photo_url.unwrap_or_default(),
-            thumbnail_url: row.photo_thumbnail_url,
-            sort_order: 0,
-            is_primary: true,
-        });
+        let photos: Vec<PhotoResponse> = photos
+            .into_iter()
+            .map(|p| PhotoResponse {
+                id: p.id.to_string(),
+                url: p.url,
+                thumbnail_url: p.thumbnail_url,
+                sort_order: p.sort_order,
+                is_primary: p.is_primary,
+            })
+            .collect();
 
         CarSummaryResponse {
             id: row.id.to_string(),
@@ -423,7 +444,7 @@ impl CarService {
                 name: row.model_name,
                 slug: row.model_slug,
             },
-            photo,
+            photos,
             views_count: row.views_count,
             likes_count: row.likes_count,
             is_liked: liked_ids.contains(&row.id),
@@ -682,11 +703,26 @@ impl CarService {
         user_id: Uuid,
         req: &CreateListingRequest,
     ) -> Result<CarDetailResponse, anyhow::Error> {
+        // Validate features against allowed list
+        validate_features(&req.features)?;
+
         // Auto-generate title from make + model + year
         let makes = self.car_repo.get_makes().await?;
         let models = self.car_repo.get_models_by_make(req.make_id).await?;
         let make_name = makes.iter().find(|m| m.id == req.make_id).map(|m| m.name.as_str()).unwrap_or("Auto");
-        let model_name = models.iter().find(|m| m.id == req.model_id).map(|m| m.name.as_str()).unwrap_or("");
+        let model = models.iter().find(|m| m.id == req.model_id);
+
+        // Validate that model belongs to the specified make
+        let model_name = match model {
+            Some(m) => {
+                if m.make_id != req.make_id {
+                    anyhow::bail!("VALIDATION: model_id {} does not belong to make_id {}", req.model_id, req.make_id);
+                }
+                m.name.as_str()
+            }
+            None => anyhow::bail!("VALIDATION: model_id {} not found for make_id {}", req.model_id, req.make_id),
+        };
+
         let mut req = req.clone();
         req.title = format!("{} {}, {}", make_name, model_name, req.year);
 
@@ -704,6 +740,9 @@ impl CarService {
         user_id: Uuid,
         req: &UpdateListingRequest,
     ) -> Result<(), anyhow::Error> {
+        // Validate features against allowed list
+        validate_features(&req.features)?;
+
         let is_owner = self.car_repo.is_owner(listing_id, user_id).await?;
         if !is_owner {
             return Err(anyhow::anyhow!("FORBIDDEN"));
@@ -798,9 +837,13 @@ impl CarService {
             (HashSet::new(), HashSet::new())
         };
 
+        let mut batch_photos = self.car_repo.get_photos_batch(&listing_ids).await?;
         let items = rows
             .into_iter()
-            .map(|row| self.feed_row_to_summary(row, &liked_ids, &favorited_ids))
+            .map(|row| {
+                let photos = batch_photos.remove(&row.id).unwrap_or_default();
+                self.feed_row_to_summary(row, &liked_ids, &favorited_ids, photos)
+            })
             .collect();
 
         Ok(FeedResponse {
@@ -867,9 +910,13 @@ impl CarService {
             .collect::<HashSet<_>>();
         let favorited_ids = listing_ids.iter().copied().collect::<HashSet<_>>();
 
+        let mut batch_photos = self.car_repo.get_photos_batch(&listing_ids).await?;
         let items = rows
             .into_iter()
-            .map(|row| self.feed_row_to_summary(row, &liked_ids, &favorited_ids))
+            .map(|row| {
+                let photos = batch_photos.remove(&row.id).unwrap_or_default();
+                self.feed_row_to_summary(row, &liked_ids, &favorited_ids, photos)
+            })
             .collect();
 
         Ok(FeedResponse {
@@ -936,9 +983,13 @@ impl CarService {
             .into_iter()
             .collect::<HashSet<_>>();
 
+        let mut batch_photos = self.car_repo.get_photos_batch(&listing_ids).await?;
         let items = rows
             .into_iter()
-            .map(|row| self.feed_row_to_summary(row, &liked_ids, &favorited_ids))
+            .map(|row| {
+                let photos = batch_photos.remove(&row.id).unwrap_or_default();
+                self.feed_row_to_summary(row, &liked_ids, &favorited_ids, photos)
+            })
             .collect();
 
         Ok(FeedResponse {
@@ -996,12 +1047,17 @@ impl CarService {
         };
 
         // Own archived listings — no need to check liked/favorited
+        let listing_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
         let liked_ids = HashSet::new();
         let favorited_ids = HashSet::new();
 
+        let mut batch_photos = self.car_repo.get_photos_batch(&listing_ids).await?;
         let items = rows
             .into_iter()
-            .map(|row| self.feed_row_to_summary(row, &liked_ids, &favorited_ids))
+            .map(|row| {
+                let photos = batch_photos.remove(&row.id).unwrap_or_default();
+                self.feed_row_to_summary(row, &liked_ids, &favorited_ids, photos)
+            })
             .collect();
 
         Ok(FeedResponse {
@@ -1057,9 +1113,24 @@ impl CarService {
     }
 }
 
+fn validate_features(features: &Option<Vec<String>>) -> Result<(), anyhow::Error> {
+    if let Some(features) = features {
+        for f in features {
+            if f.is_empty() {
+                continue; // skip empty strings
+            }
+            if !crate::domain::car::ALLOWED_FEATURES.contains(&f.as_str()) {
+                anyhow::bail!("VALIDATION: Invalid feature: {}", f);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use crate::application::dto::car::{CreateListingRequest, UpdateListingRequest};
     use crate::application::ports::car_repository::{DetailRow, FeedRow, ListingAttrsRow};
     use crate::domain::car::{CarMake, CarModel, ListingPhoto};
@@ -1167,6 +1238,9 @@ mod tests {
         ) -> Result<Uuid, anyhow::Error> {
             Ok(Uuid::new_v4())
         }
+        async fn get_photos_batch(&self, _listing_ids: &[Uuid]) -> Result<HashMap<Uuid, Vec<ListingPhoto>>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
         async fn delete_photo(&self, _photo_id: Uuid) -> Result<(), anyhow::Error> {
             Ok(())
         }
@@ -1226,6 +1300,9 @@ mod tests {
         }
         async fn get_promoted(&self, _user_id: Option<Uuid>, _limit: i64) -> Result<Vec<FeedRow>, anyhow::Error> {
             Ok(vec![])
+        }
+        async fn decay_promoted_stars(&self, _amount: i32) -> Result<u64, anyhow::Error> {
+            Ok(0)
         }
         async fn extend_listing(&self, _listing_id: Uuid, _user_id: Uuid) -> Result<(), anyhow::Error> {
             Ok(())

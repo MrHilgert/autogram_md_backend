@@ -89,7 +89,7 @@ async fn send_welcome(
 ) -> Result<(), anyhow::Error> {
     let keyboard = InlineKeyboardMarkup {
         inline_keyboard: vec![vec![InlineKeyboardButton {
-            text: "🚀 Открыть AutoMarket".to_string(),
+            text: "Открыть АвтоГрам".to_string(),
             web_app: Some(WebAppInfo {
                 url: webapp_url.to_string(),
             }),
